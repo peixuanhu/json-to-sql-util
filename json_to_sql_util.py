@@ -9,52 +9,61 @@ def convert_camel_to_snake(name):
     return ''.join(['_' + char.lower() if char.isupper() else char for char in name]).lstrip('_')
 
 # 使用正则表达式来匹配 ISO 8601 日期格式
+iso8601_regex = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
 def convert_datetime_to_sql(dt_str):
-    iso8601_regex = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
     if iso8601_regex.match(dt_str):
         dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%SZ")
         return dt.strftime("%Y-%m-%d %H:%M:%S")
-    return dt_str  # 如果不匹配 ISO 8601 格式，返回原始字符串
+    return dt_str
 
 # 解析命令行参数
 parser = argparse.ArgumentParser(description='Convert JSON to SQL statements.')
 parser.add_argument('table_name', help='Name of the SQL table to insert/update/delete rows.')
-parser.add_argument('unique_id', help='Unique identifier field for UPDATE and DELETE operations.')
-parser.add_argument('json_file', help='Name of the JSON file to process.')
+parser.add_argument('unique_id_field', help='Unique identifier field for UPDATE and DELETE operations.')
+parser.add_argument('json_file', default='data.json', help='Name of the JSON file to process (default: data.json).')
 args = parser.parse_args()
 
-# 获取当前目录
-current_dir = os.getcwd()
-
-# 读取JSON文件
-json_file_path = os.path.join(current_dir, args.json_file)
+# 获取文件路径
+json_file_path = os.path.join(os.getcwd(), args.json_file)
 try:
     with open(json_file_path, 'r') as file:
-        data = json.load(file)
+        nested_data = json.load(file)
 except FileNotFoundError:
-    print(f'Error: The file {args.json_file} was not found in the current directory.')
+    print(f'Error: The file {args.json_file} was not found.')
     exit(1)
 
-# 遍历数据并生成 SQL 语句
-for entry in data:
-    # 将字典键转换为小写下划线形式
-    entry_snake_case = {convert_camel_to_snake(k): v for k, v in entry.items()}
-    entry_snake_case = {k: convert_datetime_to_sql(v) if isinstance(v, str) else v for k, v in entry_snake_case.items()}
-    status = entry_snake_case.pop("status", None)
-    unique_id_key = convert_camel_to_snake(args.unique_id)
+# 确保数据格式正确
+if not isinstance(nested_data, list) or len(nested_data) != 2 or not all(isinstance(lst, list) for lst in nested_data):
+    print('Error: JSON file should contain a list of two lists.')
+    exit(1)
 
-    if status == "Create":
-        columns = ', '.join(entry_snake_case.keys())
-        values = ', '.join(f"'{v}'" if isinstance(v, str) else str(v) for v in entry_snake_case.values())
-        sql = f"INSERT INTO {args.table_name} ({columns}) VALUES ({values});"
-    elif status == "Update":
-        unique_id_val = entry_snake_case.pop(unique_id_key, None)
-        update_pairs = ', '.join(f"{k} = '{v}'" if isinstance(v, str) else f"{k} = {v}" for k, v in entry_snake_case.items())
-        sql = f"UPDATE {args.table_name} SET {update_pairs} WHERE {unique_id_key} = '{unique_id_val}';"
-    elif status == "Delete":
-        unique_id_val = entry_snake_case.pop(unique_id_key, None)
-        sql = f"DELETE FROM {args.table_name} WHERE {unique_id_key} = '{unique_id_val}';"
-    else:
-        continue # 跳过JSON中Status没有出现的条目
-    
-    print(sql)
+# 第一个子列表处理 Delete 条目
+for entry in nested_data[0]:
+    if entry.get("Status") == "Delete":
+        entry_snake_case = {convert_camel_to_snake(k): convert_datetime_to_sql(v) if isinstance(v, str) else v for k, v in entry.items()}
+        unique_id_key_snake_case = convert_camel_to_snake(args.unique_id_field)
+        unique_id_val = entry_snake_case.get(unique_id_key_snake_case)
+        if unique_id_val is None:
+            continue
+        sql = f"DELETE FROM {args.table_name} WHERE {unique_id_key_snake_case} = '{unique_id_val}';"
+        print(sql)
+
+# 第二个子列表处理 Update 和 Create 条目
+for entry in nested_data[1]:
+    if entry.get("Status") in ["Update", "Create"]:
+        entry_snake_case = {convert_camel_to_snake(k): convert_datetime_to_sql(v) if isinstance(v, str) else v for k, v in entry.items()}
+        status = entry_snake_case.pop("status", None)
+        unique_id_key_snake_case = convert_camel_to_snake(args.unique_id_field)
+        unique_id_val = entry_snake_case.get(unique_id_key_snake_case)
+        if status == "Create":
+            columns = ', '.join(entry_snake_case.keys())
+            values = ', '.join(f"'{v}'" if isinstance(v, str) else str(v) for v in entry_snake_case.values())
+            sql = f"INSERT INTO {args.table_name} ({columns}) VALUES ({values});"
+        elif status == "Update":
+            if unique_id_val is None:
+                continue
+            update_pairs = ', '.join(f"{k} = '{v}'" if isinstance(v, str) else f"{k} = {v}" for k, v in entry_snake_case.items())
+            sql = f"UPDATE {args.table_name} SET {update_pairs} WHERE {unique_id_key_snake_case} = '{unique_id_val}';"
+        else:
+            continue
+        print(sql)
