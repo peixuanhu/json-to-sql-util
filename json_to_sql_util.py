@@ -24,7 +24,7 @@ parser.add_argument('json_file', default='data.json', help='Name of the JSON fil
 args = parser.parse_args()
 
 # 获取文件路径
-json_file_path = os.path.join(os.getcwd(), args.json_file)
+json_file_path = args.json_file
 try:
     with open(json_file_path, 'r') as file:
         nested_data = json.load(file)
